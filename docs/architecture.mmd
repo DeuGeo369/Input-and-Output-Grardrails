@@ -1,0 +1,45 @@
+flowchart TD
+    U([User question]):::io --> V{{Length / empty check}}
+    D([Untrusted document<br/>e.g. field notes]):::io --> DI
+
+    subgraph IN[Input guardrails - run on every request, all decisions logged]
+        V --> I1[1. Prompt-injection detector<br/>normalise + de-obfuscate + base64 decode<br/>pattern bank, weighted score]
+        V --> I2[2. PII detector<br/>regex + TFN / Medicare / Luhn checksums]
+        V --> I3[3. Sensitive-topic classifier<br/>domain lexicon, 6 categories]
+        DI[Injection detector<br/>document mode]
+    end
+
+    I1 -- score >= 0.5 --> BLK[[BLOCKED_INJECTION<br/>model never called]]:::stop
+    I3 -- self_harm --> SUP[[REFUSED_WITH_SUPPORT<br/>Lifeline 13 11 14]]:::stop
+    I3 -- fraud / surveillance --> REF[[REFUSED]]:::stop
+    I2 -- redact to placeholders --> Q[Sanitised question]
+    I3 -- legal / safety / certification --> POL[(Topic policy:<br/>disclaimer, safety notice,<br/>escalate)]
+    DI -- flagged --> QU[Quarantine document<br/>+ notice]:::warn
+    DI -- clean --> DP[Redact PII, add as USR-001]
+
+    Q --> R[BM25 retrieval over<br/>knowledge base KB-001..012]
+    DP --> R
+    R -- no passage above score 2.0 --> OOS[[OUT_OF_SCOPE]]:::stop
+    R --> LLM[LLM<br/>mock / scripted / Gemini<br/>system prompt with canary]
+
+    subgraph OUT[Output guardrails - per attempt]
+        O1[4. Schema validator<br/>JSON + Pydantic strict<br/>citations must be retrieved ids]
+        O1 -- valid --> O2[5. Sensitive-info detector<br/>PII, API keys, canary,<br/>8-gram system-prompt copy]
+        O2 -- PII --> RED[Redact]:::warn
+        O2 -- clean --> O3
+        RED --> O3[6. Groundedness validator<br/>claim vs cited sentence overlap,<br/>numbers, negation]
+    end
+
+    LLM --> O1
+    O1 -- invalid --> RG{Attempts < 2?}
+    O3 -- unsupported --> RG
+    RG -- yes, with validator feedback --> LLM
+    RG -- no --> FB[[FALLBACK<br/>safe canned answer]]:::stop
+    O2 -- secret / canary / prompt leak --> FB
+    O3 -- grounded --> POL
+    POL --> OK([ANSWERED / ESCALATED<br/>answer + citations + notices]):::ok
+
+    classDef io fill:#e8f0fe,stroke:#3b6fd8,color:#111
+    classDef stop fill:#fde8e8,stroke:#c0392b,color:#111
+    classDef warn fill:#fff4dc,stroke:#c98a00,color:#111
+    classDef ok fill:#e6f6ea,stroke:#2e8b57,color:#111
